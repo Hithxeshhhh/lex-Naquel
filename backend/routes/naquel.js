@@ -3,9 +3,13 @@ const router = express.Router();
 const { createWayBill } = require('../controller/createWayBill.controller');
 const { updateWayBill, getShipmentDataByAwb } = require('../controller/updateWayBill.controller');
 const { getWayBillLabel } = require('../controller/getWayBillLabel.controller');
+const { authenticateToken } = require('../middleware/auth');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+
+// Apply authentication to all routes
+router.use(authenticateToken);
 
 // Route to create waybill using Naquel API
 router.post('/create-waybill', createWayBill);
