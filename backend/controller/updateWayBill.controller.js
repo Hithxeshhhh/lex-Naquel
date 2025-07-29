@@ -4,7 +4,7 @@ const pool = require('../config/db');
 const { getWaybillSticker } = require('./getWayBillLabel.controller');
 const waybillManager = require('../services/waybill/waybillManager');
 
-// Function to generate export reference number in format LEX-XXXXXXXXXX
+// Function to generate export reference number in format LEXNAQ-XXXXXXXXXXXXXXX
 const generateExportReference = async () => {
   let connection;
   
@@ -16,8 +16,8 @@ const generateExportReference = async () => {
     
     // Keep generating until we find a unique export reference
     while (!isUnique) {
-      const randomNumber = Math.floor(1000000000 + Math.random() * 9000000000); // Generate 10-digit random number
-      exportReference = `LEX-${randomNumber}`;
+      const randomNumber = Math.floor(100000000000000 + Math.random() * 900000000000000); // Generate 15-digit random number
+      exportReference = `LEXNAQ-${randomNumber}`;
       
       // Check if this export reference already exists
       const checkQuery = `
@@ -41,8 +41,8 @@ const generateExportReference = async () => {
   } catch (error) {
     console.error('Error generating unique export reference:', error.message);
     // Fallback to basic generation if database check fails
-    const randomNumber = Math.floor(1000000000 + Math.random() * 9000000000);
-    return `LEX-${randomNumber}`;
+    const randomNumber = Math.floor(100000000000000 + Math.random() * 900000000000000);
+    return `LEXNAQ-${randomNumber}`;
   } finally {
     if (connection) {
       connection.release();
@@ -216,12 +216,13 @@ const updateWayBill = async (req, res) => {
   try {
     // Ensure req.body exists
     if (!req.body) {
-      return res.status(400).json({
-        success: false,
-        message: 'Request body is required',
-        error: 'MISSING_REQUEST_BODY',
-        timestamp: new Date().toISOString()
-      });
+              return res.status(400).json({
+          AWB_Number: null,
+          Http_Status: "error",
+          Status: "error",
+          ErrorMsg: 'Request body is required',
+          timestamp: new Date().toISOString()
+        });
     }
 
     // Determine if this is a database-driven request (has awb) or direct JSON request
@@ -230,12 +231,13 @@ const updateWayBill = async (req, res) => {
     const isCustomWaybill = req.body._useCustomWaybill;
 
     if (!isDatabaseDriven && !isDirectJson && !isCustomWaybill) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid request format. Either provide AWB number for database lookup or complete shipment data',
-        error: 'INVALID_REQUEST_FORMAT',
-        timestamp: new Date().toISOString()
-      });
+              return res.status(400).json({
+          AWB_Number: null,
+          Http_Status: "error",
+          Status: "error",
+          ErrorMsg: 'Invalid request format. Either provide AWB number for database lookup or complete shipment data',
+          timestamp: new Date().toISOString()
+        });
     }
 
     let customerShipment = null;
@@ -251,11 +253,11 @@ const updateWayBill = async (req, res) => {
         shipmentData = customerShipment.payload;
       } catch (fetchError) {
         return res.status(404).json({
-          success: false,
-          message: 'Shipment not found',
-          error: 'SHIPMENT_NOT_FOUND',
+          AWB_Number: req.body.awb,
+          Http_Status: "error",
+          Status: "error",
+          ErrorMsg: 'Shipment not found',
           details: fetchError.message,
-          awb: req.body.awb,
           timestamp: new Date().toISOString()
         });
       }
@@ -325,19 +327,21 @@ const updateWayBill = async (req, res) => {
       } catch (allocationError) {
         // Check if this is a waybill limit reached error
         if (allocationError.message.includes('WAYBILL_LIMIT_REACHED')) {
-          return res.status(400).json({
-            success: false,
-            message: 'Limit reached all wayBills are created',
-            error: 'WAYBILL_LIMIT_REACHED',
-            details: allocationError.message,
-            timestamp: new Date().toISOString()
-          });
+                  return res.status(400).json({
+          AWB_Number: null,
+          Http_Status: "error",
+          Status: "error",
+          ErrorMsg: 'Limit reached all wayBills are created',
+          details: allocationError.message,
+          timestamp: new Date().toISOString()
+        });
         }
         
         return res.status(400).json({
-          success: false,
-          message: 'No available waybill numbers',
-          error: 'WAYBILL_ALLOCATION_FAILED',
+          AWB_Number: null,
+          Http_Status: "error",
+          Status: "error",
+          ErrorMsg: 'No available waybill numbers',
           details: allocationError.message,
           timestamp: new Date().toISOString()
         });
@@ -360,13 +364,13 @@ const updateWayBill = async (req, res) => {
         shipmentData.consigneeCountryCode
       );
     } catch (cityError) {
-      return res.status(400).json({
-        success: false,
-        message: cityError.message,
-        error: 'CITY_NOT_FOUND',
-        availableCountries: ['AE', 'KSA', 'KW', 'BH', 'JO', 'CN', 'GB', 'HK'],
-        timestamp: new Date().toISOString()
-      });
+              return res.status(400).json({
+          AWB_Number: allocatedWaybill ? allocatedWaybill.awb : null,
+          Http_Status: "error",
+          Status: "error",
+          ErrorMsg: cityError.message,
+          timestamp: new Date().toISOString()
+        });
     }
     
     console.log(`Using city code: ${cityCode} for ${shipmentData.consigneeCity}, ${shipmentData.consigneeState}, ${shipmentData.consigneeCountryCode}`);
@@ -458,7 +462,6 @@ const updateWayBill = async (req, res) => {
     console.log('Received response from Naquel API');
     console.log('=== Raw API Response ===');
     console.log('Status:', response.status);
-    console.log('Headers:', JSON.stringify(response.headers, null, 2));
     console.log('Response Data:', response.data);
     
     // Parse XML response
@@ -506,14 +509,11 @@ const updateWayBill = async (req, res) => {
         // For custom waybill, don't retry - just return error
         if (req.body._useCustomWaybill) {
           return res.status(400).json({
-            success: false,
-            message: `Custom waybill ${allocatedWaybill.awb} already exists in Naquel system`,
-            error: 'CUSTOM_WAYBILL_CONFLICT',
-            data: {
-              hasError: true,
-              customWaybill: allocatedWaybill.awb,
-              message: message
-            },
+            AWB_Number: allocatedWaybill.awb,
+            Http_Status: "error",
+            Status: "error",
+            ErrorMsg: `Custom waybill ${allocatedWaybill.awb} already exists in Naquel system`,
+            customWaybill: allocatedWaybill.awb,
             timestamp: new Date().toISOString()
           });
         }
@@ -597,14 +597,15 @@ const updateWayBill = async (req, res) => {
             
             // Add safety check to prevent infinite loops in case of system issues
             if (retryAttempt >= 50) {
-              return res.status(500).json({
-                success: false,
-                message: `System error: Failed after ${retryAttempt} retry attempts. Please check waybill availability or system status.`,
-                error: 'WAYBILL_RETRY_SYSTEM_ERROR',
-                details: retryError.message,
-                totalAttempts: retryAttempt,
-                timestamp: new Date().toISOString()
-              });
+                        return res.status(500).json({
+            AWB_Number: allocatedWaybill ? allocatedWaybill.awb : null,
+            Http_Status: "error",
+            Status: "error",
+            ErrorMsg: `System error: Failed after ${retryAttempt} retry attempts. Please check waybill availability or system status.`,
+            details: retryError.message,
+            totalAttempts: retryAttempt,
+            timestamp: new Date().toISOString()
+          });
             }
             
             // Continue retrying - don't break the loop for system errors
@@ -615,148 +616,13 @@ const updateWayBill = async (req, res) => {
         // If we reach here and retrySuccess is false, it means we hit the safety limit
         if (!retrySuccess) {
           return res.status(400).json({
-            success: false,
-            message: `Safety limit reached: Multiple consecutive waybills already exist in Naquel system.`,
-            error: 'WAYBILL_CONFLICT_SAFETY_LIMIT',
-            data: {
-              hasError: true,
-              cityCodeUsed: cityCode,
-              totalAttempts: retryAttempt,
-              safetyLimit: 50
-            },
-            timestamp: new Date().toISOString()
-          });
-        }
-        
-      } else if (message && message.toLowerCase().includes('an error happen when saving the waybill details code : 120')) {
-        // Special case: skip this waybill, do not mark as used or release, just retry
-        console.log(`⏭  Skipping waybill ${allocatedWaybill.awb} due to Naquel error code 120, will try next waybill...`);
-        
-        // For custom waybill, don't retry - just return error
-        if (req.body._useCustomWaybill) {
-          return res.status(400).json({
-            success: false,
-            message: `Custom waybill ${allocatedWaybill.awb} failed with error code 120`,
-            error: 'CUSTOM_WAYBILL_ERROR_120',
-            data: {
-              hasError: true,
-              customWaybill: allocatedWaybill.awb,
-              message: message
-            },
-            timestamp: new Date().toISOString()
-          });
-        }
-        
-        // Retry with new waybills until we find one that works (only for allocated waybills)
-        let retryAttempt = 0;
-        let retrySuccess = false;
-        
-        while (!retrySuccess) {
-          retryAttempt++;
-          console.log(` Retry attempt ${retryAttempt} - Getting new waybill for error 120...`);
-          
-          try {
-            // Add a 0.5 second delay before each retry attempt
-            await new Promise(resolve => setTimeout(resolve, 500));
-            // Get a new waybill
-            const newAllocation = await waybillManager.getNextAvailableWaybill('NAQUEL', 'PRIME');
-            allocatedWaybill = newAllocation; // Update for final response
-            shipmentData.waybillNo = newAllocation.awb;
-            console.log(` New waybill allocated: ${newAllocation.awb} (retry ${retryAttempt})`);
-            
-            // Create new XML payload with new waybill
-            const retryXmlPayload = mapJsonToXml(shipmentData, cityCode, loadTypeID);
-            
-            // Headers for SOAP request
-            const headers = {
-              'Content-Type': 'text/xml; charset=utf-8',
-              'SOAPAction': 'http://tempuri.org/UpdateWaybill'
-            };
-
-            // Make retry API call to Naquel
-            console.log(`📡 Sending retry request to Naquel API (attempt ${retryAttempt})...`);
-            const retryResponse = await axios.post(process.env.NAQUEL_API, retryXmlPayload, { headers });
-            
-            // Parse retry response
-            const retryParser = new xml2js.Parser({ explicitArray: false });
-            const retryParsedResponse = await retryParser.parseStringPromise(retryResponse.data);
-            
-            // Extract retry response data
-            const retryResult = retryParsedResponse['soap:Envelope']['soap:Body']['UpdateWaybillResponse']['UpdateWaybillResult'];
-            const retryNaquelAwbNumber = retryResult.WaybillNo || null;
-            const retryNaquelBookingRefNo = retryResult.BookingRefNo || null;
-            const retryHasError = retryResult.HasError === 'true';
-            const retryMessage = retryResult.Message || '';
-            
-            console.log(` Retry API Response - Error: ${retryHasError}, Message: ${retryMessage}`);
-            
-            if (retryHasError && retryMessage && retryMessage.toLowerCase().includes('waybill already exists')) {
-              // This waybill also already exists, mark it and try again
-              console.log(` Retry waybill ${newAllocation.awb} also exists, marking as used...`);
-              try {
-                await waybillManager.markWaybillAsUsed(newAllocation.awb, 'NAQUEL');
-              } catch (markRetryError) {
-                console.error('Failed to mark retry waybill as used:', markRetryError.message);
-              }
-              continue; // Try next waybill
-            } else if (retryHasError && retryMessage && retryMessage.toLowerCase().includes('an error happen when saving the waybill details code : 120')) {
-              // Special case: skip this waybill, do not mark as used or release, just continue
-              console.log(` Skipping waybill ${newAllocation.awb} due to Naquel error code 120, will try next waybill...`);
-              continue;
-            } else if (retryHasError) {
-              // Different error, release waybill and exit retry loop
-              try {
-                await waybillManager.releaseWaybill(newAllocation.awb, 'NAQUEL');
-                console.log(` Released retry waybill ${newAllocation.awb} due to API error`);
-              } catch (releaseError) {
-                console.error('Failed to release retry waybill:', releaseError.message);
-              }
-              break; // Exit retry loop with error
-            } else {
-              // Success! Update variables for final processing
-              console.log(` Retry successful with waybill ${newAllocation.awb}`);
-              naquelAwbNumber = retryNaquelAwbNumber;
-              naquelBookingRefNo = retryNaquelBookingRefNo;
-              hasError = retryHasError;
-              message = retryMessage;
-              response = retryResponse;
-              xmlPayload = retryXmlPayload;
-              retrySuccess = true;
-              break; // Exit retry loop successfully
-            }
-            
-          } catch (retryError) {
-            console.error(` Retry attempt ${retryAttempt} failed:`, retryError.message);
-            
-            // Add safety check to prevent infinite loops in case of system issues
-            if (retryAttempt >= 50) {
-              return res.status(500).json({
-                success: false,
-                message: `System error: Failed after ${retryAttempt} retry attempts. Please check waybill availability or system status.`,
-                error: 'WAYBILL_RETRY_SYSTEM_ERROR',
-                details: retryError.message,
-                totalAttempts: retryAttempt,
-                timestamp: new Date().toISOString()
-              });
-            }
-            
-            // Continue retrying - don't break the loop for system errors
-            console.log(` System error on attempt ${retryAttempt}, continuing with next attempt...`);
-          }
-        }
-        
-        // If we reach here and retrySuccess is false, it means we hit the safety limit
-        if (!retrySuccess) {
-          return res.status(400).json({
-            success: false,
-            message: `Safety limit reached: Multiple consecutive waybills failed with error code 120.`,
-            error: 'WAYBILL_ERROR_120_SAFETY_LIMIT',
-            data: {
-              hasError: true,
-              cityCodeUsed: cityCode,
-              totalAttempts: retryAttempt,
-              safetyLimit: 50
-            },
+            AWB_Number: allocatedWaybill ? allocatedWaybill.awb : null,
+            Http_Status: "error",
+            Status: "error",
+            ErrorMsg: `Safety limit reached: Multiple consecutive waybills already exist in Naquel system.`,
+            cityCodeUsed: cityCode,
+            totalAttempts: retryAttempt,
+            safetyLimit: 50,
             timestamp: new Date().toISOString()
           });
         }
@@ -774,14 +640,12 @@ const updateWayBill = async (req, res) => {
       }
       
       const errorResponse = {
-        success: false,
-        message: message,
-        error: 'NAQUEL_API_ERROR',
-        data: {
-          hasError: true,
-          cityCodeUsed: cityCode,
-          releasedWaybill: allocatedWaybill ? allocatedWaybill.awb : null
-        },
+        AWB_Number: allocatedWaybill ? allocatedWaybill.awb : null,
+        Http_Status: "error",
+        Status: "error",
+        ErrorMsg: message,
+        cityCodeUsed: cityCode,
+        releasedWaybill: allocatedWaybill ? allocatedWaybill.awb : null,
         timestamp: new Date().toISOString()
       };
       
@@ -833,41 +697,39 @@ const updateWayBill = async (req, res) => {
     }
 
     const finalResponse = {
-      success: true,
-      message: message,
-      data: {
-        waybillNo: naquelAwbNumber,
-        bookingRefNo: naquelBookingRefNo,
-        hasError: false,
-        cityCodeUsed: cityCode,
-        labelAvailable: !!labelData,
-        databaseId: insertResult.insertId,
-        allocatedWaybill: {
-          awb: allocatedWaybill.awb,
-          id: allocatedWaybill.id,
-          vendor: allocatedWaybill.vendor,
-          series: allocatedWaybill.series,
-          isCustomWaybill: req.body._useCustomWaybill || false
-        },
-        customerShipment: customerShipment ? {
-          id: customerShipment.shipmentId,
-          awb: customerShipment.awbNumber,
-          orderId: customerShipment.orderId,
-          customerId: customerShipment.customerId
-        } : null,
-        currencyConversion: shipmentData.convertedProductValue ? {
-          originalAmount: shipmentData.originalProductValue,
-          originalCurrency: shipmentData.originalCurrency,
-          convertedAmount: shipmentData.convertedProductValue,
-          finalCurrency: shipmentData.finalCurrency
-        } : null,
-        unitValueConversion: shipmentData.convertedUnitValue ? {
-          originalUnitValue: shipmentData.originalUnitValue,
-          originalCurrency: shipmentData.originalCurrency,
-          convertedUnitValue: shipmentData.convertedUnitValue,
-          finalCurrency: shipmentData.finalCurrency
-        } : null
+      AWB_Number: naquelAwbNumber,
+      Http_Status: "success",
+      Status: "success",
+      ErrorMsg: message,
+      bookingRefNo: naquelBookingRefNo,
+      cityCodeUsed: cityCode,
+      labelAvailable: !!labelData,
+      databaseId: insertResult.insertId,
+      allocatedWaybill: {
+        awb: allocatedWaybill.awb,
+        id: allocatedWaybill.id,
+        vendor: allocatedWaybill.vendor,
+        series: allocatedWaybill.series,
+        isCustomWaybill: req.body._useCustomWaybill || false
       },
+      customerShipment: customerShipment ? {
+        id: customerShipment.shipmentId,
+        awb: customerShipment.awbNumber,
+        orderId: customerShipment.orderId,
+        customerId: customerShipment.customerId
+      } : null,
+      currencyConversion: shipmentData.convertedProductValue ? {
+        originalAmount: shipmentData.originalProductValue,
+        originalCurrency: shipmentData.originalCurrency,
+        convertedAmount: shipmentData.convertedProductValue,
+        finalCurrency: shipmentData.finalCurrency
+      } : null,
+      unitValueConversion: shipmentData.convertedUnitValue ? {
+        originalUnitValue: shipmentData.originalUnitValue,
+        originalCurrency: shipmentData.originalCurrency,
+        convertedUnitValue: shipmentData.convertedUnitValue,
+        finalCurrency: shipmentData.finalCurrency
+      } : null,
       timestamp: new Date().toISOString()
     };
     
@@ -920,8 +782,10 @@ const updateWayBill = async (req, res) => {
     }
 
     res.status(500).json({
-      success: false,
-      message: 'Failed to update waybill',
+      AWB_Number: allocatedWaybill ? allocatedWaybill.awb : null,
+      Http_Status: "error",
+      Status: "error",
+      ErrorMsg: 'Failed to update waybill',
       error: error.message,
       timestamp: new Date().toISOString()
     });
@@ -945,7 +809,7 @@ const mapJsonToXml = (data, cityCode, loadTypeID) => {
           <Version>${process.env.NAQUEL_VERSION}</Version>
           <ClientAddress>
             <PhoneNumber>${data.sellerMobile}</PhoneNumber>
-            <FirstAddress> </FirstAddress>
+            <FirstAddress>Dubai</FirstAddress>
             <CountryCode>AE</CountryCode>
             <CityCode>DXB</CityCode>
           </ClientAddress>

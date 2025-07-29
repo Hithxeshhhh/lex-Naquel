@@ -1,5 +1,6 @@
 # Environment variables
 .env
+.env.production
 
 # Node modules
 /node_modules

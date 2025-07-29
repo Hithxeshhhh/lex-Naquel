@@ -3,6 +3,7 @@ const router = express.Router();
 const { createWayBill } = require('../controller/createWayBill.controller');
 const { updateWayBill, getShipmentDataByAwb } = require('../controller/updateWayBill.controller');
 const { getWayBillLabel } = require('../controller/getWayBillLabel.controller');
+const { trackWayBill } = require('../controller/trackWayBill.controller');
 const { authenticateToken } = require('../middleware/auth');
 const fs = require('fs');
 const path = require('path');
@@ -18,9 +19,13 @@ router.post('/create-waybill', createWayBill);
 // Expects: {"awb": "CUSTOMER_AWB_NUMBER"}
 router.post('/update-waybill', updateWayBill);
 
+// Route to track waybill using Naquel API
+// Expects: {"waybillNo": "NAQUEL_WAYBILL_NUMBER"}
+router.post('/lex-naquel-track-waybill', trackWayBill);
+
 // Route to update waybill using Naquel API (Test endpoint with direct JSON input)
 // Expects: JSON object similar to sample.json format
-router.post('/update-waybill-test', async (req, res) => {
+router.post('/lex-naquel-update-waybill', async (req, res) => {
   try {
     // Validate that request body contains shipment data
     if (!req.body || Object.keys(req.body).length === 0) {
