@@ -200,51 +200,7 @@ class WaybillManager {
     }
   }
 
-  /**
-   * Release a waybill number back to available pool (in case of errors)
-   * @param {string} awb - Waybill number to release
-   * @param {string} vendor - Vendor name
-   * @returns {Promise<Object>} - Operation result
-   */
-  async releaseWaybill(awb, vendor = 'NAQUEL') {
-    let connection;
-    
-    try {
-      connection = await pool.getConnection();
-      
-      const releaseQuery = `
-        UPDATE last_mile_awb_numbers 
-        SET is_used = 0, 
-            used_at = NULL, 
-            modified_at = NOW() 
-        WHERE awb = ? 
-        AND vendor = ?
-      `;
-      
-      const [result] = await connection.execute(releaseQuery, [awb, vendor]);
-      
-      if (result.affectedRows === 0) {
-        throw new Error(`Waybill number ${awb} not found or already released`);
-      }
-      
-      console.log(`🔄 Released waybill number: ${awb}`);
-      
-      return {
-        success: true,
-        awb: awb,
-        message: 'Waybill released successfully'
-      };
-      
-    } catch (error) {
-      console.error('❌ Error releasing waybill number:', error.message);
-      throw new Error(`Failed to release waybill number: ${error.message}`);
-      
-    } finally {
-      if (connection) {
-        connection.release();
-      }
-    }
-  }
+
   
   /**
    * Check if a specific waybill number is available

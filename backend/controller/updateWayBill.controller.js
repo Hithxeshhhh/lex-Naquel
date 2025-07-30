@@ -287,6 +287,30 @@ const updateWayBill = async (req, res) => {
       console.log(`Generated export_reference: ${shipmentData.export_reference}`);
     }
     
+    // Log the incoming request
+    console.log('=== Incoming Request ===');
+    console.log('Request body:', JSON.stringify(shipmentData, null, 2));
+    
+    // Lookup city code BEFORE waybill allocation to avoid wasting waybills
+    let cityCode;
+    try {
+      cityCode = await lookupCityCode(
+        shipmentData.consigneeCity,
+        shipmentData.consigneeState,
+        shipmentData.consigneeCountryCode
+      );
+      console.log(`✅ City code validation successful: ${cityCode} for ${shipmentData.consigneeCity}, ${shipmentData.consigneeState}, ${shipmentData.consigneeCountryCode}`);
+    } catch (cityError) {
+      console.error(`❌ City code validation failed: ${cityError.message}`);
+      return res.status(400).json({
+        AWB_Number: null,
+        Http_Status: "error",
+        Status: "error",
+        ErrorMsg: cityError.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     // Function to attempt waybill allocation with retry logic for database issues
     const attemptWaybillAllocation = async () => {
       let attempt = 0;
@@ -319,7 +343,7 @@ const updateWayBill = async (req, res) => {
       }
     };
 
-    // Execute initial waybill allocation (only for non-custom waybill cases)
+    // Execute waybill allocation AFTER city code validation (only for non-custom waybill cases)
     if (!isCustomWaybill) {
       let allocationResult;
       try {
@@ -350,28 +374,6 @@ const updateWayBill = async (req, res) => {
       allocatedWaybill = allocationResult.allocatedWaybill;
     }
     shipmentData.waybillNo = allocatedWaybill.awb;
-    
-    // Log the incoming request
-    console.log('=== Incoming Request ===');
-    console.log('Request body:', JSON.stringify(shipmentData, null, 2));
-    
-    // Lookup city code before creating XML
-    let cityCode;
-    try {
-      cityCode = await lookupCityCode(
-        shipmentData.consigneeCity,
-        shipmentData.consigneeState,
-        shipmentData.consigneeCountryCode
-      );
-    } catch (cityError) {
-              return res.status(400).json({
-          AWB_Number: allocatedWaybill ? allocatedWaybill.awb : null,
-          Http_Status: "error",
-          Status: "error",
-          ErrorMsg: cityError.message,
-          timestamp: new Date().toISOString()
-        });
-    }
     
     console.log(`Using city code: ${cityCode} for ${shipmentData.consigneeCity}, ${shipmentData.consigneeState}, ${shipmentData.consigneeCountryCode}`);
     
@@ -494,18 +496,6 @@ const updateWayBill = async (req, res) => {
       if (message && message.toLowerCase().includes('waybill already exists')) {
         console.log(`⚠️  Waybill ${allocatedWaybill.awb} already exists in Naquel system, implementing retry logic...`);
         
-        // Mark this waybill as used in our database (only if it was allocated from pool)
-        if (!req.body._useCustomWaybill) {
-          try {
-            await waybillManager.markWaybillAsUsed(allocatedWaybill.awb, 'NAQUEL');
-            console.log(`🔒 Marked waybill ${allocatedWaybill.awb} as used due to Naquel conflict`);
-          } catch (markError) {
-            console.error('Failed to mark waybill as used:', markError.message);
-          }
-        } else {
-          console.log(`⚠️  Custom waybill ${allocatedWaybill.awb} already exists in Naquel system`);
-        }
-        
         // For custom waybill, don't retry - just return error
         if (req.body._useCustomWaybill) {
           return res.status(400).json({
@@ -562,22 +552,12 @@ const updateWayBill = async (req, res) => {
             console.log(`📋 Retry API Response - Error: ${retryHasError}, Message: ${retryMessage}`);
             
             if (retryHasError && retryMessage && retryMessage.toLowerCase().includes('waybill already exists')) {
-              // This waybill also already exists, mark it and try again
-              console.log(`⚠️  Retry waybill ${newAllocation.awb} also exists, marking as used...`);
-              try {
-                await waybillManager.markWaybillAsUsed(newAllocation.awb, 'NAQUEL');
-              } catch (markRetryError) {
-                console.error('Failed to mark retry waybill as used:', markRetryError.message);
-              }
+              // This waybill also already exists, continue to next waybill
+              console.log(`⚠️  Retry waybill ${newAllocation.awb} also exists, trying next waybill...`);
               continue; // Try next waybill
             } else if (retryHasError) {
-              // Different error, release waybill and exit retry loop
-              try {
-                await waybillManager.releaseWaybill(newAllocation.awb, 'NAQUEL');
-                console.log(`🔄 Released retry waybill ${newAllocation.awb} due to API error`);
-              } catch (releaseError) {
-                console.error('Failed to release retry waybill:', releaseError.message);
-              }
+              // Different error, exit retry loop (waybill remains marked as used)
+              console.log(`❌ Different API error on retry: ${retryMessage}`);
               break; // Exit retry loop with error
             } else {
               // Success! Update variables for final processing
@@ -628,15 +608,8 @@ const updateWayBill = async (req, res) => {
         }
         
       } else {
-        // Different type of error, release waybill and return error
-        if (allocatedWaybill && allocatedWaybill.awb) {
-          try {
-            await waybillManager.releaseWaybill(allocatedWaybill.awb, 'NAQUEL');
-            console.log(`Released waybill ${allocatedWaybill.awb} due to API error`);
-          } catch (releaseError) {
-            console.error('Failed to release waybill after API error:', releaseError.message);
-          }
-        }
+        // Different type of error - waybill remains marked as used, just return error
+        console.log(`❌ Naquel API error: ${message} - Waybill ${allocatedWaybill.awb} remains marked as used`);
       }
       
       const errorResponse = {
@@ -645,7 +618,8 @@ const updateWayBill = async (req, res) => {
         Status: "error",
         ErrorMsg: message,
         cityCodeUsed: cityCode,
-        releasedWaybill: allocatedWaybill ? allocatedWaybill.awb : null,
+        allocatedWaybill: allocatedWaybill ? allocatedWaybill.awb : null,
+        note: "Waybill remains marked as used despite API error",
         timestamp: new Date().toISOString()
       };
       
@@ -742,15 +716,9 @@ const updateWayBill = async (req, res) => {
   } catch (error) {
     console.error('Error in updateWayBill:', error.message);
     
-    // Release the allocated waybill number back to the pool since operation failed
-    // Only release if it was allocated from the pool (not custom waybill)
-    if (allocatedWaybill && allocatedWaybill.awb && !req.body._useCustomWaybill) {
-      try {
-        await waybillManager.releaseWaybill(allocatedWaybill.awb, 'NAQUEL');
-        console.log(`Released waybill ${allocatedWaybill.awb} due to system error`);
-      } catch (releaseError) {
-        console.error('Failed to release waybill after system error:', releaseError.message);
-      }
+    // Waybill remains marked as used even if operation fails
+    if (allocatedWaybill && allocatedWaybill.awb) {
+      console.log(`⚠️  Waybill ${allocatedWaybill.awb} remains marked as used despite system error`);
     }
     
     if (error.response) {
