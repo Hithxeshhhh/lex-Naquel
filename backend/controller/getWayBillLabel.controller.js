@@ -1,6 +1,7 @@
 const axios = require('axios');
 const xml2js = require('xml2js');
 const pool = require('../config/db');
+const { logError } = require('../utils/errorLogger');
 
 // Function to lookup city code from Naquel_Pincodes table
 const lookupCityCode = async (consigneeCity, consigneeState, consigneeCountryCode) => {
@@ -99,8 +100,8 @@ const getWaybillSticker = async (shipmentData, waybillNo) => {
                     <tns:Latitude/>
                     <tns:Longitude/>
                     <tns:ShipperName>${shipmentData.sellerFirstName} ${shipmentData.sellerLastName}</tns:ShipperName>
-                    <tns:FirstAddress> </tns:FirstAddress>
-                    <tns:Location> </tns:Location>
+                    <tns:FirstAddress>.</tns:FirstAddress>
+                    <tns:Location>.</tns:Location>
                     <tns:CountryCode>AE</tns:CountryCode>
                     <tns:CityCode>DXB</tns:CityCode>
                 </tns:ClientAddress>
@@ -148,6 +149,20 @@ const getWayBillLabel = async (req, res) => {
     const { waybillNo } = req.params;
     
     if (!waybillNo) {
+      // Log missing waybill error
+      await logError({
+        controllerName: 'getWayBillLabel',
+        errorType: 'MISSING_WAYBILL_NO',
+        errorCode: 'VALIDATION_ERROR',
+        errorMessage: 'Waybill number is required',
+        requestData: req.params,
+        waybillNumber: null,
+        httpStatus: 400,
+        apiStatus: 'error',
+        hasError: true,
+        stackTrace: null
+      });
+      
       return res.status(400).json({
         success: false,
         message: 'Waybill number is required',
@@ -163,6 +178,20 @@ const getWayBillLabel = async (req, res) => {
     );
 
     if (rows.length === 0) {
+      // Log waybill not found error
+      await logError({
+        controllerName: 'getWayBillLabel',
+        errorType: 'WAYBILL_NOT_FOUND',
+        errorCode: 'WAYBILL_NOT_EXISTS',
+        errorMessage: 'Waybill not found',
+        requestData: req.params,
+        waybillNumber: waybillNo,
+        httpStatus: 404,
+        apiStatus: 'error',
+        hasError: true,
+        stackTrace: null
+      });
+      
       return res.status(404).json({
         success: false,
         message: 'Waybill not found',
@@ -203,13 +232,33 @@ const getWayBillLabel = async (req, res) => {
     };
     
     console.log('Fetching fresh label from Naquel API for:', waybillNo);
-    const labelData = await getWaybillSticker(shipmentData, waybillNo);
-    
-    // Update database with new label
-    await connection.execute(
-      'UPDATE Naquel_awb SET Label = ? WHERE Id = ?',
-      [labelData, waybillRecord.Id]
-    );
+    let labelData;
+    try {
+      labelData = await getWaybillSticker(shipmentData, waybillNo);
+      
+      // Update database with new label
+      await connection.execute(
+        'UPDATE Naquel_awb SET Label = ? WHERE Id = ?',
+        [labelData, waybillRecord.Id]
+      );
+    } catch (stickerError) {
+      // Log sticker fetch error
+      await logError({
+        controllerName: 'getWayBillLabel',
+        errorType: 'STICKER_FETCH_ERROR',
+        errorCode: 'LABEL_FETCH_FAILED',
+        errorMessage: stickerError.message,
+        requestData: { waybillNo, shipmentData },
+        responseData: stickerError.response?.data || null,
+        waybillNumber: waybillNo,
+        httpStatus: 500,
+        apiStatus: 'error',
+        hasError: true,
+        stackTrace: stickerError.stack
+      });
+      
+      throw stickerError; // Re-throw to be handled by main catch block
+    }
 
     res.status(200).json({
       success: true,
@@ -224,6 +273,21 @@ const getWayBillLabel = async (req, res) => {
 
   } catch (error) {
     console.error('Error getting waybill label:', error.message);
+    
+    // Log system error
+    await logError({
+      controllerName: 'getWayBillLabel',
+      errorType: 'SYSTEM_ERROR',
+      errorCode: 'INTERNAL_ERROR',
+      errorMessage: error.message,
+      requestData: req.params,
+      responseData: error.response?.data || null,
+      waybillNumber: req.params?.waybillNo || null,
+      httpStatus: 500,
+      apiStatus: 'error',
+      hasError: true,
+      stackTrace: error.stack
+    });
     
     res.status(500).json({
       success: false,

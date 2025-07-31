@@ -1,6 +1,7 @@
 const axios = require('axios');
 const xml2js = require('xml2js');
 const pool = require('../config/db');
+const { logError } = require('../utils/errorLogger');
 
 // Function to fetch and parse original request data from database
 const getOriginalRequestData = async (waybillNo) => {
@@ -118,6 +119,20 @@ const trackWayBill = async (req, res) => {
   try {
     // Validate request
     if (!req.body || !req.body.waybillNo) {
+      // Log missing waybill error
+      await logError({
+        controllerName: 'trackWayBill',
+        errorType: 'MISSING_WAYBILL_NO',
+        errorCode: 'VALIDATION_ERROR',
+        errorMessage: 'waybillNo is required',
+        requestData: req.body,
+        waybillNumber: null,
+        httpStatus: 400,
+        apiStatus: 'error',
+        hasError: true,
+        stackTrace: null
+      });
+      
       return res.status(400).json({
         success: false,
         message: 'waybillNo is required',
@@ -176,6 +191,21 @@ const trackWayBill = async (req, res) => {
     const tracking = traceResult.Tracking;
     
     if (!tracking) {
+      // Log no tracking data error
+      await logError({
+        controllerName: 'trackWayBill',
+        errorType: 'NO_TRACKING_DATA',
+        errorCode: 'TRACKING_NOT_FOUND',
+        errorMessage: 'No tracking information found for this waybill',
+        requestData: req.body,
+        responseData: parsedResponse,
+        waybillNumber: waybillNo,
+        httpStatus: 404,
+        apiStatus: 'error',
+        hasError: true,
+        stackTrace: null
+      });
+      
       return res.status(404).json({
         success: false,
         message: 'No tracking information found for this waybill',
@@ -267,6 +297,21 @@ const trackWayBill = async (req, res) => {
     } else {
       console.error('Request setup error:', error.message);
     }
+    
+    // Log system error
+    await logError({
+      controllerName: 'trackWayBill',
+      errorType: 'SYSTEM_ERROR',
+      errorCode: 'INTERNAL_ERROR',
+      errorMessage: error.message,
+      requestData: req.body,
+      responseData: error.response?.data || null,
+      waybillNumber: req.body?.waybillNo || null,
+      httpStatus: 500,
+      apiStatus: 'error',
+      hasError: true,
+      stackTrace: error.stack
+    });
     
     // Store error in database if possible
     if (connection) {

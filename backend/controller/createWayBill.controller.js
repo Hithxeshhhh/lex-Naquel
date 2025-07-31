@@ -2,6 +2,7 @@ const axios = require('axios');
 const xml2js = require('xml2js');
 const pool = require('../config/db');
 const { getWaybillSticker } = require('./getWayBillLabel.controller');
+const { logError } = require('../utils/errorLogger');
 
 // Function to generate export reference number in format LEX-XXXXXXXXXX
 const generateExportReference = async () => {
@@ -128,6 +129,22 @@ const createWayBill = async (req, res) => {
         shipmentData.consigneeCountryCode
       );
     } catch (cityError) {
+      // Log city code error
+      await logError({
+        controllerName: 'createWayBill',
+        errorType: 'CITY_CODE_NOT_FOUND',
+        errorCode: 'CITY_NOT_FOUND',
+        errorMessage: cityError.message,
+        requestData: req.body,
+        waybillNumber: null,
+        exportReference: shipmentData?.export_reference || null,
+        cityCode: null,
+        httpStatus: 400,
+        apiStatus: 'error',
+        hasError: true,
+        stackTrace: cityError.stack
+      });
+      
       return res.status(400).json({
         success: false,
         message: cityError.message,
@@ -188,6 +205,23 @@ const createWayBill = async (req, res) => {
     if (hasError) {
       console.log('Naquel API returned error:', message);
       
+      // Log Naquel API error
+      await logError({
+        controllerName: 'createWayBill',
+        errorType: 'NAQUEL_API_ERROR',
+        errorCode: 'API_ERROR',
+        errorMessage: message,
+        requestData: req.body,
+        responseData: parsedResponse,
+        waybillNumber: null,
+        exportReference: shipmentData?.export_reference || null,
+        cityCode: cityCode,
+        httpStatus: 400,
+        apiStatus: 'error',
+        hasError: true,
+        stackTrace: null
+      });
+      
       const errorResponse = {
         success: false,
         message: message,
@@ -242,6 +276,24 @@ const createWayBill = async (req, res) => {
         }
       } catch (labelError) {
         console.error('Failed to fetch waybill label:', labelError.message);
+        
+        // Log label fetch error
+        await logError({
+          controllerName: 'createWayBill',
+          errorType: 'LABEL_FETCH_ERROR',
+          errorCode: 'LABEL_FETCH_FAILED',
+          errorMessage: labelError.message,
+          requestData: { waybillNo: naquelAwbNumber, shipmentData },
+          responseData: labelError.response?.data || null,
+          waybillNumber: naquelAwbNumber,
+          exportReference: shipmentData?.export_reference || null,
+          cityCode: cityCode,
+          httpStatus: 500,
+          apiStatus: 'error',
+          hasError: true,
+          stackTrace: labelError.stack
+        });
+        
         // Don't fail the main operation if label fetch fails
       }
     }
@@ -277,6 +329,23 @@ const createWayBill = async (req, res) => {
     } else {
       console.error('Request setup error:', error.message);
     }
+    
+    // Log system error
+    await logError({
+      controllerName: 'createWayBill',
+      errorType: 'SYSTEM_ERROR',
+      errorCode: 'INTERNAL_ERROR',
+      errorMessage: error.message,
+      requestData: req.body,
+      responseData: error.response?.data || null,
+      waybillNumber: null,
+      exportReference: req.body?.export_reference || null,
+      cityCode: cityCode,
+      httpStatus: 500,
+      apiStatus: 'error',
+      hasError: true,
+      stackTrace: error.stack
+    });
     
     // Store error in database if possible
     if (connection) {
